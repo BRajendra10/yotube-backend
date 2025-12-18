@@ -1,38 +1,41 @@
 import mongoose, { isValidObjectId } from "mongoose"
 import { Post } from '../models/post.model.js';
-import { ApiError } from '../utils/ApiError.js';
-import { ApiResponse } from '../utils/ApiResponce.js';
 import { asyncHandler } from '../utils/asynHandler.js';
+import { ApiError } from '../utils/apiError.js';
+import { ApiResponse } from '../utils/apiResponce.js';
 
 const createPost = asyncHandler(async (req, res) => {
     const { content } = req.body
 
-    if(!content) {
-        throw new ApiError(400, "Post conent is required")
+    if (!content) {
+        throw new ApiError(400, "Post content is required");
     }
 
-    const createdPost = await Post.create({
+    const post = await Post.create({
         content,
         owner: req.user?._id
     })
 
-    if(!createdPost) {
-        throw new ApiError(500, "Something went wrong while creating post")
+    if (!post) {
+        throw new ApiError(500, "Something went wrong while creating post");
     }
+
+    const populatedPost = await Post.findById(post._id)
+        .populate("owner", "_id username fullName avatar")
 
     return res
         .status(201)
         .json(
-            new ApiResponse(201, createdPost, "Post is created successfully")
+            new ApiResponse(201, populatedPost, "Post is created successfully")
         )
-
 })
 
 const getUserPosts = asyncHandler(async (req, res) => {
-    const { userId } = req.params
+    const { userId } = req.params;
+    const currentUserId = req.user?._id;
 
-    if(!userId || !isValidObjectId(userId)) {
-        throw new ApiError(400, "Invalid user id or missing user id")
+    if (!userId || !isValidObjectId(userId)) {
+        throw new ApiError(400, "Invalid user id or missing user id");
     }
 
     const postPipeline = await Post.aggregate([
@@ -45,65 +48,162 @@ const getUserPosts = asyncHandler(async (req, res) => {
             $sort: {
                 createdAt: -1
             }
+        },
+        {
+            $lookup: {
+                from: "users",
+                localField: "owner",
+                foreignField: "_id",
+                as: "owner"
+            },
+        },
+        { $unwind: "$owner" },
+        {
+            $lookup: {
+                from: "likes",
+                localField: "_id",
+                foreignField: "post",
+                as: "likes"
+            },
+        },
+        {
+            $addFields: {
+                likesCount: { $size: "$likes"},
+                isLiked: currentUserId
+                    ? { $in: [currentUserId, "$likes.likedBy"] }
+                    : false,
+            }
+        },
+        {
+            $project: {
+                content: 1,
+                createdAt: 1,
+                updatedAt: 1,
+                likesCount: 1,
+                isLiked: 1,
+                owner: {
+                    _id: "$owner._id",
+                    username: "$owner.username",
+                    fullName: "$owner.fullName",
+                    avatar: "$owner.avatar"
+                }
+            }
         }
     ])
 
     return res
         .status(200)
         .json(
-            new ApiResponse(200, postPipeline, "Posts feteched successfully")
+            new ApiResponse(200, postPipeline, "Posts fetched successfully")
         )
-
-
 })
+
+const getAllPosts = asyncHandler(async (req, res) => {
+    const userId = req.user?._id;
+
+    const posts = await Post.aggregate([
+        {
+            $sort: { createdAt: -1 },
+        },
+        {
+            $lookup: {
+                from: "users",
+                localField: "owner",
+                foreignField: "_id",
+                as: "owner",
+            },
+        },
+        { $unwind: "$owner" },
+        {
+            $lookup: {
+                from: "likes",
+                localField: "_id",
+                foreignField: "post",
+                as: "likes"
+            }
+        },
+        {
+            $addFields: {
+                likesCount: { $size: "$likes"},
+                isLiked: userId
+                    ? { $in: [userId, "$likes.likedBy"] }
+                    : false,
+            }
+        },
+        {
+            $project: {
+                content: 1,
+                createdAt: 1,
+                updatedAt: 1,
+                likesCount: 1,
+                isLiked: 1,
+                owner: {
+                    _id: "$owner._id",
+                    username: "$owner.username",
+                    fullName: "$owner.fullName",
+                    avatar: "$owner.avatar",
+                },
+            },
+        },
+    ]);
+
+    return res.status(200).json(
+        new ApiResponse(200, posts, "Feed posts fetched successfully")
+    );
+});
 
 const updatePost = asyncHandler(async (req, res) => {
     const { postId } = req.params
     const { content } = req.body
 
-    if(!postId || !isValidObjectId(postId)) {
-        throw new ApiError(400, "Post is required and should be valid")
+    if (!postId || !isValidObjectId(postId)) {
+        throw new ApiError(400, "Post id is required and should be valid");
     }
 
-    if(!content) {
-        throw new ApiError(400, "content is required for updating with old content.")
+    if (!content) {
+        throw new ApiError(400, "Content is required for updating");
     }
 
     const updatedPost = await Post.findByIdAndUpdate(
         new mongoose.Types.ObjectId(postId),
         {
-            $set: {
-                content,
-            }
+            $set: { content }
         },
-        {
-            new: true,
-        }
+        { new: true }
     )
+
+    if (!updatedPost) {
+        throw new ApiError(404, "Post not found");
+    }
+
+    const populatedPost = await Post.findById(postId)
+        .populate("owner", "_id username fullName avatar")
 
     return res
         .status(200)
         .json(
-            new ApiResponse(200, updatedPost, "Post updated successfully")
+            new ApiResponse(200, populatedPost, "Post updated successfully")
         )
-
 })
 
 const deletePost = asyncHandler(async (req, res) => {
     const { postId } = req.params
 
-    if(!postId || !isValidObjectId(postId)) {
-        throw new ApiError(400, "Post is required and should be valid")
+    if (!postId || !isValidObjectId(postId)) {
+        throw new ApiError(400, "Post id is required and should be valid");
     }
 
-    await Post.findByIdAndDelete (new mongoose.Types.ObjectId(postId))
+    const deleted = await Post.findByIdAndDelete(new mongoose.Types.ObjectId(postId))
+
+    if (!deleted) {
+        throw new ApiError(404, "Post not found");
+    }
 
     return res
         .status(200)
         .json(
-            new ApiResponse(200, {}, "Post deleted Successfully")
+            new ApiResponse(200, {}, "Post deleted successfully")
         )
-
 })
 
 export {
@@ -111,4 +211,5 @@ export {
     getUserPosts,
     updatePost,
     deletePost,
+    getAllPosts
 }
