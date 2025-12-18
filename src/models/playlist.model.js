@@ -10,6 +10,11 @@ const playlistSchema = new Schema(
             type: String,
             required: true
         },
+        type: {
+            type: String,
+            enum: ["owned", "saved"],
+            default: "owned"
+        },
         videos: [
             {
                 type: Schema.Types.ObjectId,

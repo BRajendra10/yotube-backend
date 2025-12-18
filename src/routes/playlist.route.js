@@ -7,7 +7,7 @@ const router = Router()
 router.use(verifyJWT)
 
 router.route("/create").post(createPlaylist)
-router.route("/:userId").get(getUserPlaylists)
+router.route("/user/:userId").get(getUserPlaylists)
 router
     .route("/:playlistId")
     .get(getPlaylistById)
