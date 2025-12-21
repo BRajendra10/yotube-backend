@@ -6,6 +6,8 @@ import { uploadOnCloudinary, deleteOnCloudinary } from '../utils/cloudinary.js';
 import jwt from 'jsonwebtoken';
 import mongoose, { isValidObjectId } from 'mongoose';
 
+const options = { httpOnly: true, secure: false, sameSite: "lax" };
+
 const generateAccessAndRefreshTokens = async (userId) => {
     try {
         const user = await User.findById(userId);
@@ -98,8 +100,6 @@ const loginUser = asyncHandler(async (req, res) => {
 
     const loggedInUser = await User.findById(user._id).select("-password -refreshToken");
 
-    const options = { httpOnly: true, secure: true, sameSite: "None" };
-
     return res
         .status(200)
         .cookie("accessToken", accessToken, options)
@@ -111,12 +111,6 @@ const logoutUser = asyncHandler(async (req, res) => {
     await User.findByIdAndUpdate(req.user._id, {
         $set: { refreshToken: undefined }
     }, { new: true });
-
-    const options = {
-        httpOnly: true,
-        secure: true,
-        sameSite: "None",
-    };
 
     return res
         .status(200)
@@ -148,8 +142,6 @@ const refreshAccessToken = asyncHandler(async (req, res) => {
 
     const { refreshToken: newRefreshToken, accessToken } =
         await generateAccessAndRefreshTokens(user._id);
-
-    const options = { httpOnly: true, secure: true, sameSite: "None" };
 
     return res
         .status(200)
