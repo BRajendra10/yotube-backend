@@ -6,7 +6,7 @@ import { uploadOnCloudinary, deleteOnCloudinary } from '../utils/cloudinary.js';
 import jwt from 'jsonwebtoken';
 import mongoose, { isValidObjectId } from 'mongoose';
 
-const options = { httpOnly: true, secure: false, sameSite: "lax" };
+const options = { httpOnly: true, secure: true, sameSite: "None" };
 
 const generateAccessAndRefreshTokens = async (userId) => {
     try {
