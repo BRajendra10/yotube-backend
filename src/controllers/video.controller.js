@@ -2,9 +2,10 @@ import mongoose, { isValidObjectId } from 'mongoose'
 import { asyncHandler } from '../utils/asynHandler.js';
 import { ApiError } from '../utils/apiError.js';
 import { ApiResponse } from '../utils/apiResponce.js';
-import { uploadOnCloudinary, deleteOnCloudinary } from '../utils/cloudinary.js'
+import { uploadOnImageKit, deleteOnImageKit } from '../utils/imagekit.js'
 import { Video } from '../models/video.model.js';
 import { Like } from '../models/like.model.js';
+import { getVideoDuration } from '../utils/duration.js';
 
 const getAllVideos = asyncHandler(async (req, res) => {
     const { page = 1, limit = 10, query = "", sortBy = "createdAt", sortType = "desc", userId } = req.query;
@@ -77,7 +78,7 @@ const getAllVideos = asyncHandler(async (req, res) => {
                 owner: {
                     _id: 1,
                     username: 1,
-                    fullname: 1,
+                    fullName: 1,
                     avatar: 1
                 }
             }
@@ -116,22 +117,23 @@ const publishVideo = asyncHandler(async (req, res) => {
     if (!videoFileLocalPath) throw new ApiError(400, "Video file is required");
     if (!thumbnailLocalPath) throw new ApiError(400, "Thumbnail is required");
 
-    const videoFile = await uploadOnCloudinary(videoFileLocalPath, "video");
-    const thumbnail = await uploadOnCloudinary(thumbnailLocalPath, "image");
+    const duration = await getVideoDuration(videoFileLocalPath);
+    const videoFile = await uploadOnImageKit(videoFileLocalPath);
+    const thumbnail = await uploadOnImageKit(thumbnailLocalPath);
 
-    if (!videoFile?.secure_url || !thumbnail?.secure_url) {
-        throw new ApiError(500, "Error uploading files to Cloudinary");
+    if (!videoFile?.url || !thumbnail?.url) {
+        throw new ApiError(500, "Error uploading files to Imagekit");
     }
 
     const videoData = await Video.create({
         title,
         description,
-        videoFile: videoFile.secure_url,
-        videoPublicId: videoFile.public_id,
-        thumbnail: thumbnail.secure_url,
-        thumbnailPublicId: thumbnail.public_id,
+        videoFile: videoFile.url,
+        videoFileId: videoFile.fileId,
+        thumbnail: thumbnail.url,
+        thumbnailFileId: thumbnail.fileId,
         owner: req.user._id,
-        duration: videoFile.duration
+        duration,
     });
 
     return res
@@ -166,6 +168,14 @@ const getVideoById = asyncHandler(async (req, res) => {
         },
         {
             $lookup: {
+                from: "subscribers",
+                localField: "owner._id",
+                foreignField: "channel",
+                as: "subscribers"
+            }
+        },
+        {
+            $lookup: {
                 from: "likes",
                 localField: "_id",
                 foreignField: "video",
@@ -175,17 +185,20 @@ const getVideoById = asyncHandler(async (req, res) => {
         {
             $addFields: {
                 likesCount: { $size: "$likes" },
-                isLiked: userId ? {
-                    $in: [userId, "$likes.likedBy"]
-                } : false
+                isLiked: userId 
+                    ? { $in: [userId, "$likes.likedBy"] } 
+                    : false,
+                "owner.isSubscribed": userId
+                    ? { $in: [userId, "$subscribers.subscriber"] }
+                    : false
             }
         },
         {
             $project: {
                 videoFile: 1,
-                videoPublicId: 1,
+                videoFileId: 1,
                 thumbnail: 1,
-                thumbnailPublicId: 1,
+                thumbnailFileId: 1,
                 title: 1,
                 description: 1,
                 duration: 1,
@@ -197,7 +210,8 @@ const getVideoById = asyncHandler(async (req, res) => {
                     _id: 1,
                     username: 1,
                     fullName: 1,
-                    avatar: 1
+                    avatar: 1,
+                    isSubscribed: 1,
                 }
             }
         }
@@ -231,24 +245,25 @@ const updateVideoDetails = asyncHandler(async (req, res) => {
     const thumbnailPath = req.files?.thumbnail?.[0]?.path;
 
     if (videoFilePath) {
-        if (video.videoPublicId) await deleteOnCloudinary(video.videoPublicId);
+        if (video.videoFileId) await deleteOnImageKit(video.videoFileId);
 
-        const uploadedVideo = await uploadOnCloudinary(videoFilePath, "video");
+        const duration = await getVideoDuration(videoFilePath);
+        const uploadedVideo = await uploadOnImageKit(videoFilePath);
         if (!uploadedVideo?.url) throw new ApiError(500, "Error uploading new video");
 
         video.videoFile = uploadedVideo.url;
-        video.videoPublicId = uploadedVideo.public_id;
-        video.duration = uploadedVideo.duration;
+        video.videoFileId = uploadedVideo.fileId;
+        video.duration = duration;
     }
 
     if (thumbnailPath) {
-        if (video.thumbnailPublicId) await deleteOnCloudinary(video.thumbnailPublicId);
+        if (video.thumbnailFileId) await deleteOnImageKit(video.thumbnailFileId);
 
-        const uploadedThumbnail = await uploadOnCloudinary(thumbnailPath, "image");
+        const uploadedThumbnail = await uploadOnImageKit(thumbnailPath);
         if (!uploadedThumbnail?.url) throw new ApiError(500, "Error uploading new thumbnail");
 
         video.thumbnail = uploadedThumbnail.url;
-        video.thumbnailPublicId = uploadedThumbnail.public_id;
+        video.thumbnailFileId = uploadedThumbnail.fileId;
     }
 
     video.title = title;
@@ -272,9 +287,8 @@ const deleteVideo = asyncHandler(async (req, res) => {
 
     if (!video) throw new ApiError(404, "Video not found", true);
 
-    // Cloudinary deletion → external → server error → no TRUE flag
-    if (video.videoPublicId) await deleteOnCloudinary(video.videoPublicId, "video");
-    if (video.thumbnailPublicId) await deleteOnCloudinary(video.thumbnailPublicId, "image");
+    if (video.videoFileId) await deleteOnImageKit(video.videoFileId);
+    if (video.thumbnailFileId) await deleteOnImageKit(video.thumbnailFileId);
 
     await Video.findByIdAndDelete(videoId);
 

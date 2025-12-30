@@ -26,10 +26,10 @@ const userSchema = new Schema(
             index: true,
         },
         avatar: {
-            type: String, // cloudinary url
+            type: String,
             required: true,
         },
-        avatarPublicId: {
+        avatarFileId: {
             type: String,
             required: true,
         },
@@ -37,7 +37,7 @@ const userSchema = new Schema(
             type: String,
             required: true,
         },
-        coverImagePublicId: {
+        coverImageFileId: {
             type: String,
             required: true,
         },
@@ -53,7 +53,13 @@ const userSchema = new Schema(
         },
         refreshToken: {
             type: String,
-        }
+        },
+        isEmailVerified: {
+            type: Boolean,
+            default: false
+        },
+        emailVerificationCode: String,
+        emailVerificationExpires: Number
     },
     {
         timestamps: true
@@ -81,7 +87,7 @@ userSchema.methods.generateAccessToken = function () {
     )
 }
 
-userSchema.methods.generateRefreshToken = function (){
+userSchema.methods.generateRefreshToken = function () {
     return jwt.sign(
         { _id: this._id },
         process.env.REFRESH_TOKEN_SECRET,

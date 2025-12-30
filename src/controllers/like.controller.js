@@ -21,7 +21,7 @@ const toggleVideoLike = asyncHandler(async (req, res) => {
 
         return res
             .status(200)
-            .json(new ApiResponse(200, {}, "Video unliked"));
+            .json(new ApiResponse(200, {videoId, likeState: false}, "Video unliked"));
     }
 
     const createdLike = await Like.create({
@@ -35,7 +35,7 @@ const toggleVideoLike = asyncHandler(async (req, res) => {
 
     return res
         .status(200)
-        .json(new ApiResponse(200, createdLike, "Video liked"));
+        .json(new ApiResponse(200, {videoId, likeState: true}, "Video liked"));
 });
 
 const toggleCommentLike = asyncHandler(async (req, res) => {
@@ -55,7 +55,7 @@ const toggleCommentLike = asyncHandler(async (req, res) => {
 
         return res
             .status(200)
-            .json(new ApiResponse(200, {}, "Comment unliked"));
+            .json(new ApiResponse(200, {commentId, likeState: false}, "Comment unliked"));
     }
 
     const createdLike = await Like.create({
@@ -69,7 +69,7 @@ const toggleCommentLike = asyncHandler(async (req, res) => {
 
     return res
         .status(200)
-        .json(new ApiResponse(200, createdLike, "Comment liked"));
+        .json(new ApiResponse(200, {commentId, likeState: true}, "Comment liked"));
 });
 
 const togglePostLike = asyncHandler(async (req, res) => {
@@ -89,7 +89,7 @@ const togglePostLike = asyncHandler(async (req, res) => {
 
         return res
             .status(200)
-            .json(new ApiResponse(200, {}, "Post unliked"));
+            .json(new ApiResponse(200, {postId, likeState: false}, "Post unliked"));
     }
 
     const createLikedPost = await Like.create({
@@ -103,7 +103,7 @@ const togglePostLike = asyncHandler(async (req, res) => {
 
     return res
         .status(200)
-        .json(new ApiResponse(201, createLikedPost, "Post liked"));
+        .json(new ApiResponse(201, {postId, likeState: true}, "Post liked"));
 });
 
 const getLikedVideos = asyncHandler(async (req, res) => {

@@ -1,12 +1,27 @@
+import { User } from '../models/user.model.js';
 import { asyncHandler } from '../utils/asynHandler.js';
 import { ApiError } from '../utils/apiError.js';
 import { ApiResponse } from '../utils/apiResponce.js';
-import { User } from '../models/user.model.js';
-import { uploadOnCloudinary, deleteOnCloudinary } from '../utils/cloudinary.js';
+import { deleteOnImageKit, uploadOnImageKit } from '../utils/imagekit.js';
+import { transporter } from '../utils/nodemailer.js';
 import jwt from 'jsonwebtoken';
 import mongoose, { isValidObjectId } from 'mongoose';
+import crypto from 'crypto';
+import bcrypt from 'bcrypt';
 
-const options = { httpOnly: true, secure: true, sameSite: "None" };
+const accessTokenOptions = {
+    httpOnly: true,
+    secure: false,
+    sameSite: "lax",
+    maxAge: 1000 * 60 * 15
+};
+
+const refreshTokenOptions = {
+    httpOnly: true,
+    secure: false,
+    sameSite: "lax",
+    maxAge: 1000 * 60 * 60 * 24 * 15
+}
 
 const generateAccessAndRefreshTokens = async (userId) => {
     try {
@@ -46,24 +61,36 @@ const registerUser = asyncHandler(async (req, res) => {
     let avatar, coverImage;
 
     try {
-        avatar = await uploadOnCloudinary(avatarLocalPath);
-        coverImage = await uploadOnCloudinary(coverImageLocalPath);
+        avatar = await uploadOnImageKit(avatarLocalPath);
+        coverImage = await uploadOnImageKit(coverImageLocalPath);
     } catch (error) {
         throw new ApiError(500, "Image upload failed");
     }
 
-    if (!avatar?.secure_url) throw new ApiError(500, "Avatar upload failed");
-    if (!coverImage?.secure_url) throw new ApiError(500, "Cover image upload failed");
+    if (!avatar?.url) throw new ApiError(500, "Avatar upload failed");
+    if (!coverImage?.url) throw new ApiError(500, "Cover image upload failed");
+
+    const code = crypto.randomInt(100000, 1000000).toString();
+    const hashedCode = await bcrypt.hash(code, 10);
 
     const user = await User.create({
         fullName,
-        avatar: avatar.secure_url,
-        avatarPublicId: avatar.public_id,
-        coverImage: coverImage.secure_url,
-        coverImagePublicId: coverImage.public_id,
+        avatar: avatar.url,
+        avatarFileId: avatar.fileId,
+        coverImage: coverImage.url,
+        coverImageFileId: coverImage.fileId,
         email,
         password,
         username: username.toLowerCase(),
+        isEmailVerified: false,
+        emailVerificationCode: hashedCode,
+        emailVerificationExpires: Date.now() + 10 * 60 * 1000,
+    });
+
+    await transporter.sendMail({
+        to: email,
+        subject: "Your verification code",
+        html: `<h2>${code}</h2><p>Expires in 10 minutes</p>`,
     });
 
     const createdUser = await User.findById(user._id).select("-password -refreshToken");
@@ -74,6 +101,79 @@ const registerUser = asyncHandler(async (req, res) => {
 
     return res.status(201).json(
         new ApiResponse(201, createdUser, "User registered successfully")
+    );
+});
+
+const verifyEmail = asyncHandler(async (req, res) => {
+    const { email, code } = req.body;
+
+    const user = await User.findOne({ email });
+    if (!user) throw new ApiError(400, "User not found");
+
+    if (user.emailVerificationExpires < Date.now()) {
+        throw new ApiError(400, "Code expired");
+    }
+
+    const isMatch = await bcrypt.compare(code.toString(), user.emailVerificationCode);
+    if (!isMatch) throw new ApiError(400, "Invalid code");
+
+    const accessToken = await user.generateAccessToken();
+    const refreshToken = await user.generateRefreshToken();
+
+    user.isEmailVerified = true;
+    user.refreshToken = refreshToken;
+    user.emailVerificationCode = undefined;
+    user.emailVerificationExpires = undefined;
+    await user.save();
+
+    res
+        .status(201)
+        .cookie("accessToken", accessToken, accessTokenOptions)
+        .cookie("refreshToken", refreshToken, refreshTokenOptions)
+        .json(
+            new ApiResponse(201, {}, "User email verification completed")
+        )
+})
+
+const resendVerificationCode = asyncHandler(async (req, res) => {
+    const { email } = req.body;
+
+    if (!email) {
+        throw new ApiError(400, "Email is required");
+    }
+
+    const user = await User.findOne({ email });
+    console.log(user)
+    if (!user) {
+        throw new ApiError(404, "User not found");
+    }
+
+    console.log("Checking if email is already verifyed or not")
+
+    if (user.isEmailVerified) {
+        throw new ApiError(400, "Email is already verified");
+    }
+
+    console.log("Email is nto verifiied !!")
+
+    const code = crypto.randomInt(100000, 1000000).toString();
+    const hashedCode = await bcrypt.hash(code, 10);
+
+    console.log(code, hashedCode)
+
+    user.emailVerificationCode = hashedCode;
+    user.emailVerificationExpires = Date.now() + 10 * 60 * 1000;
+
+    await user.save();
+
+    await transporter.sendMail({
+        to: user.email,
+        subject: "Your verification code",
+        html: `<h2>${code}</h2><p>Expires in 10 minutes</p>`,
+    });
+
+    return res.status(200).json(
+        new ApiResponse(200, {}, "New verification code sent successfully")
     );
 });
 
@@ -90,6 +190,10 @@ const loginUser = asyncHandler(async (req, res) => {
         throw new ApiError(404, "User does not exist");
     }
 
+    if (!user.isEmailVerified) {
+        throw new ApiError(403, "Please verify your email first");
+    }
+
     const isPasswordValid = await user.isPasswordCorrect(password);
 
     if (!isPasswordValid) {
@@ -102,8 +206,8 @@ const loginUser = asyncHandler(async (req, res) => {
 
     return res
         .status(200)
-        .cookie("accessToken", accessToken, options)
-        .cookie("refreshToken", refreshToken, options)
+        .cookie("accessToken", accessToken, accessTokenOptions)
+        .cookie("refreshToken", refreshToken, refreshTokenOptions)
         .json(new ApiResponse(200, { user: loggedInUser, accessToken, refreshToken }, "Login successful"));
 });
 
@@ -114,13 +218,13 @@ const logoutUser = asyncHandler(async (req, res) => {
 
     return res
         .status(200)
-        .clearCookie("accessToken", options)
-        .clearCookie("refreshToken", options)
+        .clearCookie("accessToken", accessTokenOptions)
+        .clearCookie("refreshToken", refreshTokenOptions)
         .json(new ApiResponse(200, {}, "User logged out"));
 });
 
 const refreshAccessToken = asyncHandler(async (req, res) => {
-    const incomingRefreshToken = req.cookies.refreshToken || req.body.refreshToken;
+    let incomingRefreshToken = req.cookies?.refreshToken || req.body?.refreshToken;
 
     if (!incomingRefreshToken) {
         throw new ApiError(401, "Refresh token missing");
@@ -135,38 +239,16 @@ const refreshAccessToken = asyncHandler(async (req, res) => {
 
     const user = await User.findById(decoded?._id);
 
-    if (!user) throw new ApiError(401, "Token user not found");
-    if (incomingRefreshToken !== user.refreshToken) {
-        throw new ApiError(401, "Refresh token expired or reused");
+    if (!user || user.refreshToken !== incomingRefreshToken) {
+        throw new ApiError(401, "Refresh token reused or expired");
     }
 
-    const { refreshToken: newRefreshToken, accessToken } =
-        await generateAccessAndRefreshTokens(user._id);
+    const accessToken = await user.generateAccessToken();
 
     return res
         .status(200)
-        .cookie("accessToken", accessToken, options)
-        .cookie("refreshToken", newRefreshToken, options)
-        .json(new ApiResponse(200, { accessToken, newRefreshToken }, "Token refreshed"));
-});
-
-const changeCurrentPassword = asyncHandler(async (req, res) => {
-    const { oldPassword, newPassword } = req.body;
-
-    if (!oldPassword || !newPassword) {
-        throw new ApiError(400, "Old and new passwords are required");
-    }
-
-    const user = await User.findById(req.user._id);
-    if (!user) throw new ApiError(404, "User not found");
-
-    const isPasswordCorrect = await user.isPasswordCorrect(oldPassword);
-    if (!isPasswordCorrect) throw new ApiError(401, "Old password incorrect");
-
-    user.password = newPassword;
-    await user.save({ validateBeforeSave: false });
-
-    return res.status(200).json(new ApiResponse(200, {}, "Password updated"));
+        .cookie("accessToken", accessToken, accessTokenOptions)
+        .json(new ApiResponse(200, { accessToken }, "Token refreshed"));
 });
 
 const getCurrentUser = asyncHandler(async (req, res) => {
@@ -192,23 +274,23 @@ const updateUserProfile = asyncHandler(async (req, res) => {
 
     try {
         if (avatarFilePath) {
-            if (user.avatarPublicId) await deleteOnCloudinary(user.avatarPublicId);
+            if (user.avatarFileId) await deleteOnImageKit(user.avatarFileId);
 
-            const avatar = await uploadOnCloudinary(avatarFilePath);
-            if (!avatar?.secure_url) throw new ApiError(500, "Avatar upload failed", false);
+            const avatar = await uploadOnImageKit(avatarFilePath);
+            if (!avatar?.url) throw new ApiError(500, "Avatar upload failed", false);
 
-            updateData.avatar = avatar.secure_url;
-            updateData.avatarPublicId = avatar.public_id;
+            updateData.avatar = avatar.url;
+            updateData.avatarFileId = avatar.fileId;
         }
 
         if (coverImageFilePath) {
-            if (user.coverImagePublicId) await deleteOnCloudinary(user.coverImagePublicId);
+            if (user.coverImageFileId) await deleteOnImageKit(user.coverImageFileId);
 
-            const coverImage = await uploadOnCloudinary(coverImageFilePath);
-            if (!coverImage?.secure_url) throw new ApiError(500, "Cover image upload failed");
+            const coverImage = await uploadOnImageKit(coverImageFilePath);
+            if (!coverImage?.url) throw new ApiError(500, "Cover image upload failed");
 
-            updateData.coverImage = coverImage.secure_url;
-            updateData.coverImagePublicId = coverImage.public_id;
+            updateData.coverImage = coverImage.url;
+            updateData.coverImageFileId = coverImage.fileId;
         }
     } catch (error) {
         throw new ApiError(500, "Image processing failed", false, [], error.stack);
@@ -364,8 +446,9 @@ export {
     refreshAccessToken,
     getWatchHistory,
     getCurrentUser,
-    changeCurrentPassword,
     updateUserProfile,
     getUserChannelProfile,
-    addVideoToWatchHistory
+    addVideoToWatchHistory,
+    verifyEmail,
+    resendVerificationCode
 };
