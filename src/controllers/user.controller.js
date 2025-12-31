@@ -11,15 +11,15 @@ import bcrypt from 'bcrypt';
 
 const accessTokenOptions = {
     httpOnly: true,
-    secure: false,
-    sameSite: "lax",
+    secure: true,
+    sameSite: "None",
     maxAge: 1000 * 60 * 15
 };
 
 const refreshTokenOptions = {
     httpOnly: true,
-    secure: false,
-    sameSite: "lax",
+    secure: true,
+    sameSite: "None",
     maxAge: 1000 * 60 * 60 * 24 * 15
 }
 
